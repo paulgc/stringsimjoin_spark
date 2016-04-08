@@ -15,6 +15,8 @@ l_join_attr = 'title'
 r_join_attr = 'title'
 tokens_attr = 'tokens'
 threshold = 0.8
+l_output_attrs = ['id', 'title', 'release']
+r_output_attrs = ['id', 'title', 'year']
 
 conf = SparkConf()
 conf.setMaster("local")
@@ -55,4 +57,40 @@ candidates_bd = sc.broadcast(candidates.collectAsMap())
 prefix_index_bd.unpersist()
 size_index_bd.unpersist()
 token_order_bd.unpersist()
+
+# Create map from row id to row tokenized join attr and broadcast it
+r_id_tokens = r_tokenized_table.map(lambda x : (x[r_id_attr], x[tokens_attr]))
+r_id_tokens_bd = sc.broadcast(r_id_tokens.collectAsMap())
+
+
+def get_sim_score(l_id, l_tokens, candidates_bd, r_id_tokens_bd, sim_function):
+    sim_score = []
+    candidates = candidates_bd.value.get(l_id)
+    for r_id in candidates:
+        r_tokens = r_id_tokens_bd.value.get(r_id)
+        sim = sim_function(set(l_tokens), set(r_tokens))
+        sim_score.append((r_id, sim))
+    return sim_score
+
+
+sim_function = get_jaccard_fn()
+
+result = l_tokenized_table.map(lambda x : (x[l_id_attr], get_sim_score(x[l_id_attr], x[tokens_attr], candidates_bd, r_id_tokens_bd, sim_function))) \
+                        .flatMapValues(lambda x : x) \
+                        .map(lambda x : (x[0], x[1][0], x[1][1])) \
+			.filter(lambda x : x[2] > threshold)
+
+
+# Create result dataframe with left table id, right table id and sim score
+result_schema = ['l_id', 'r_id', 'sim']
+result = sqlContext.createDataFrame(result, result_schema)
+
+
+# Join left table with result based on left table id
+joined_table = l_tokenized_table.join(result, l_tokenized_table[l_id_attr] == result['l_id']).select(l_output_attrs + result_schema)
+
+
+# Join resulted table with right table on right table id
+output_attrs = [joined_table[attr] for attr in l_output_attrs + ['sim']] + [r_tokenized_table[attr] for attr in r_output_attrs]
+joined_table = joined_table.join(r_tokenized_table, joined_table['r_id'] == r_tokenized_table[r_id_attr]).select(*output_attrs)
 
