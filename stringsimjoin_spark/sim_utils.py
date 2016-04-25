@@ -1,4 +1,14 @@
 
+
+def get_sim_score(l_id, l_tokens, r_id_list, r_id_tokens_bd, sim_function):
+    sim_score = []
+    for r_id in r_id_list:
+        r_tokens = r_id_tokens_bd.value.get(r_id)
+        sim = sim_function(set(l_tokens), set(r_tokens))
+        sim_score.append((r_id, sim))
+    return sim_score
+
+
 def get_jaccard_fn():
     return jaccard
 
